@@ -15,8 +15,16 @@ app.get('/', (req, res) => res.send('Habit Nudge API running ✅'));
 app.post('/createHabit', async (req, res) => {
   try {
     const { userId, title, frequency, reminderTime } = req.body;
-    const docRef = db.collection('users').doc(userId).collection('habits').doc();
-    
+
+    if (!userId || !title || !frequency || !reminderTime) {
+      return res.status(400).json({ error: 'Missing required fields' });
+    }
+
+    const docRef = db.collection('users')
+      .doc(userId)
+      .collection('habits')
+      .doc(); // auto-generated habit ID
+
     await docRef.set({
       title,
       frequency,
@@ -26,8 +34,11 @@ app.post('/createHabit', async (req, res) => {
       completionLog: [],
       createdAt: new Date()
     });
+
     res.status(200).json({ success: true, id: docRef.id });
+
   } catch (err) {
+    console.error('🔥 Error in /createHabit:', err);
     res.status(500).json({ error: err.message });
   }
 });
