@@ -1,22 +1,19 @@
-// authMiddleware.js
-const { admin } = require('./firebaseService');
+const jwt = require('jsonwebtoken');
 
-async function verifyToken(req, res, next) {
+function verifyToken(req, res, next) {
   const authHeader = req.headers.authorization;
 
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    return res.status(401).json({ error: 'Missing or invalid token' });
+  if (!authHeader || !authHeader.startsWith("Bearer ")) {
+    return res.status(401).json({ error: "Missing or invalid token" });
   }
 
-  const idToken = authHeader.split('Bearer ')[1];
-
+  const token = authHeader.split(" ")[1]; // not [1] if you're using BearerXYZ
   try {
-    const decodedToken = await admin.auth().verifyIdToken(idToken);
-    req.user = decodedToken;
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    req.user = decoded;
     next();
-  } catch (error) {
-    console.error('Auth Error:', error.message);
-    return res.status(401).json({ error: 'Unauthorized' });
+  } catch (err) {
+    return res.status(401).json({ error: "Unauthorized" });
   }
 }
 

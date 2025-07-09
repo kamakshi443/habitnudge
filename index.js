@@ -1,7 +1,9 @@
 const express = require('express');
 const cors = require('cors');
+const bcrypt = require('bcrypt');
+const jwt = require('jsonwebtoken');
 const dotenv = require('dotenv');
-const { db } = require('./firebaseService');
+const db = require('./firebaseService');
 const verifyToken = require('./authMiddleware');
 
 dotenv.config();
@@ -9,15 +11,16 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+console.log("db--", db)
 app.get('/', (req, res) => res.send('Habit Nudge API running ✅'));
 
 // ------------------------ AUTH ------------------------
 // POST /auth/register
 app.post('/auth/register', async (req, res) => {
   try {
-    const { name, email, userId, referredBy } = req.body;
+    const { name, email, userId, password, referredBy } = req.body;
 
-    if (!name || !email || !userId) {
+    if (!name || !email || !userId || !password) {
       return res.status(400).json({ error: "All fields are required" });
     }
 
@@ -27,22 +30,25 @@ app.post('/auth/register', async (req, res) => {
       return res.status(409).json({ error: "User already exists" });
     }
 
+    const hashedPassword = await bcrypt.hash(password, 10);
+
     await userRef.set({
       name,
       email,
+      password: hashedPassword,
       referredBy: referredBy || null,
       xp: 0,
       badges: [],
       createdAt: new Date()
     });
 
-    // Optional: reward both
+    // Optional referral reward
     if (referredBy) {
       const referrerRef = db.collection('users').doc(referredBy);
       const referrer = await referrerRef.get();
       if (referrer.exists) {
         await referrerRef.update({
-          xp: (referrer.data().xp || 0) + 20, // reward XP
+          xp: (referrer.data().xp || 0) + 20,
         });
       }
     }
@@ -57,11 +63,39 @@ app.post('/auth/register', async (req, res) => {
 
 app.post('/auth/login', async (req, res) => {
   try {
-    const { userId } = req.body;
+    const { userId, password } = req.body;
+
+    if (!userId || !password) {
+      return res.status(400).json({ error: "UserId and password required" });
+    }
+
     const userRef = db.collection('users').doc(userId);
     const doc = await userRef.get();
+
     if (!doc.exists) return res.status(404).json({ error: "User not found" });
-    res.status(200).json({ success: true, user: doc.data() });
+
+    const user = doc.data();
+
+    const isMatch = await bcrypt.compare(password, user.password);
+    if (!isMatch) return res.status(401).json({ error: "Invalid credentials" });
+
+    const token = jwt.sign(
+      { userId: userId, email: user.email },
+      process.env.JWT_SECRET,
+      { expiresIn: process.env.JWT_EXPIRES_IN }
+    );
+
+    res.status(200).json({
+      success: true,
+      token,
+      user: {
+        name: user.name,
+        email: user.email,
+        xp: user.xp,
+        badges: user.badges
+      }
+    });
+
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -133,12 +167,19 @@ app.get('/habit/:userId/:habitId', verifyToken, async (req, res) => {
   }
 });
 
-app.put('/habit/:userId/:habitId/update', verifyToken, async (req, res) => {
+app.put('/habit/:userId/:habitId/update', async (req, res) => {
+  const { userId, habitId } = req.params;
+  let updateData = req.body;
+
+  // Filter out undefined values
+  updateData = Object.fromEntries(
+    Object.entries(updateData).filter(([_, v]) => v !== undefined)
+  );
+
   try {
-    const updates = (({ title, frequency, reminderTime }) => ({ title, frequency, reminderTime }))(req.body);
-    const habitRef = db.collection('users').doc(req.params.userId).collection('habits').doc(req.params.habitId);
-    await habitRef.update(updates);
-    res.status(200).json({ success: true, message: 'Habit updated', updates });
+    const habitRef = db.collection('users').doc(userId).collection('habits').doc(habitId);
+    await habitRef.update(updateData);
+    res.status(200).json({ success: true, message: "Habit updated successfully." });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -206,6 +247,13 @@ app.delete('/habit/:userId/:habitId', verifyToken, async (req, res) => {
 });
 
 // ------------------------ GAMIFICATION ------------------------
+// To add XP to a user's profile.
+// This could be triggered when a user completes a habit, earns a bonus, or receives a reward.
+//  Common Use Cases:
+// When a user completes a daily habit
+// When a user shares the app and gets referral XP
+// When a user hits a streak milestone
+// When a user levels up
 app.post('/users/:userId/xp', verifyToken, async (req, res) => {
   try {
     const { userId } = req.params;
